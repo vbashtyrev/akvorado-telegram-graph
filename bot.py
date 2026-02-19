@@ -60,39 +60,49 @@ def apply_env_overrides(config: dict) -> None:
         config.setdefault("clickhouse", {})["url"] = ch_url.rstrip("/")
 
 
-def fetch_bps_series(url: str, table: str, boundary: str, time_from: datetime, time_to: datetime, interval_sec: int) -> tuple[list[datetime], list[float], str | None]:
-    """
-    Запрос в ClickHouse: временной ряд bps (бит/с).
-    Возвращает (timestamps, bps_list, error_message или None).
-    """
+def _tbl_sql(table: str) -> str:
     if "." in table and not table.startswith("."):
         db, tbl = table.split(".", 1)
-        tbl_sql = "`{}`.`{}`".format(db.replace("`", "``"), tbl.replace("`", "``"))
-    else:
-        tbl_sql = "`{}`".format(table.replace("`", "``"))
+        return "`{}`.`{}`".format(db.replace("`", "``"), tbl.replace("`", "``"))
+    return "`{}`".format(table.replace("`", "``"))
+
+
+def fetch_bps_by_interface(
+    url: str,
+    table: str,
+    boundary: str,
+    time_from: datetime,
+    time_to: datetime,
+    interval_sec: int,
+) -> tuple[dict[tuple[str, str], list[tuple[datetime, float]]], list[dict], str | None]:
+    """
+    Запрос в ClickHouse: InIfBoundary = boundary, группировка по ExporterName, InIfName.
+    Возвращает (series, stats, error).
+    series: (ExporterName, InIfName) -> [(minute, bps), ...]
+    stats: список dict с ключами InIfName, ExporterName, Min, Max, Last, Average, P95 (Мбит/с).
+    """
+    tbl_sql = _tbl_sql(table)
     bytes_expr = "Bytes * coalesce(SamplingRate, 1)"
     where_extra = "WHERE InIfBoundary = '{}' ".format(str(boundary).replace("'", "''"))
     tz_suffix = ", 'UTC'"
     from_ts = time_from.strftime("%Y-%m-%d %H:%M:%S")
     to_ts = time_to.strftime("%Y-%m-%d %H:%M:%S")
-
     if interval_sec == 60:
-        sql = (
-            "SELECT toStartOfMinute(TimeReceived) AS minute, sum({bytes}) * 8 / 60 AS bps "
-            "FROM {tbl} "
-            "{where_extra}"
-            "AND TimeReceived >= toDateTime('{from_ts}'{tz}) AND TimeReceived < toDateTime('{to_ts}'{tz}) "
-            "GROUP BY minute ORDER BY minute FORMAT TabSeparated"
-        ).format(bytes=bytes_expr, tbl=tbl_sql, where_extra=where_extra, from_ts=from_ts, to_ts=to_ts, tz=tz_suffix)
+        time_expr = "toStartOfMinute(TimeReceived)"
+        rate_div = "60"
     else:
-        sql = (
-            "SELECT toStartOfInterval(TimeReceived, INTERVAL {interval} SECOND) AS minute, sum({bytes}) * 8 / {interval} AS bps "
-            "FROM {tbl} "
-            "{where_extra}"
-            "AND TimeReceived >= toDateTime('{from_ts}'{tz}) AND TimeReceived < toDateTime('{to_ts}'{tz}) "
-            "GROUP BY minute ORDER BY minute FORMAT TabSeparated"
-        ).format(bytes=bytes_expr, tbl=tbl_sql, interval=interval_sec, where_extra=where_extra, from_ts=from_ts, to_ts=to_ts, tz=tz_suffix)
-
+        time_expr = "toStartOfInterval(TimeReceived, INTERVAL {} SECOND)".format(interval_sec)
+        rate_div = str(interval_sec)
+    sql = (
+        "SELECT ExporterName, InIfName, {time_expr} AS minute, sum({bytes}) * 8 / {rate} AS bps "
+        "FROM {tbl} "
+        "{where_extra}"
+        "AND TimeReceived >= toDateTime('{from_ts}'{tz}) AND TimeReceived < toDateTime('{to_ts}'{tz}) "
+        "GROUP BY ExporterName, InIfName, minute ORDER BY ExporterName, InIfName, minute FORMAT TabSeparated"
+    ).format(
+        time_expr=time_expr, bytes=bytes_expr, rate=rate_div, tbl=tbl_sql,
+        where_extra=where_extra, from_ts=from_ts, to_ts=to_ts, tz=tz_suffix,
+    )
     try:
         r = requests.post(
             url.rstrip("/") + "/",
@@ -102,38 +112,71 @@ def fetch_bps_series(url: str, table: str, boundary: str, time_from: datetime, t
         )
         r.raise_for_status()
     except requests.RequestException as e:
-        return [], [], "ClickHouse: {}".format(e)
+        return {}, [], "ClickHouse: {}".format(e)
 
-    timestamps = []
-    values = []
+    series: dict[tuple[str, str], list[tuple[datetime, float]]] = {}
     for line in r.text.strip().splitlines():
         if not line:
             continue
         parts = line.split("\t")
-        if len(parts) >= 2:
+        if len(parts) >= 4:
             try:
-                ts_str = parts[0].strip()[:19]
+                exporter, inif = parts[0].strip(), parts[1].strip()
+                ts_str = parts[2].strip()[:19]
                 dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                timestamps.append(dt)
-                values.append(float(parts[1]))
+                bps = float(parts[3])
+                key = (exporter, inif)
+                series.setdefault(key, []).append((dt, bps))
             except (ValueError, TypeError):
                 continue
-    if not timestamps:
-        return [], [], "За выбранный период данных нет (или таблица/фильтр не совпадают)."
-    return timestamps, values, None
+    if not series:
+        return {}, [], "За выбранный период данных нет (InIfBoundary = {}).".format(boundary)
+
+    stats = []
+    for (exporter, inif), points in series.items():
+        if not points:
+            continue
+        bps_vals = [p[1] for p in points]
+        n = len(bps_vals)
+        min_bps = min(bps_vals)
+        max_bps = max(bps_vals)
+        last_bps = bps_vals[-1]
+        avg_bps = sum(bps_vals) / n
+        sorted_bps = sorted(bps_vals)
+        p95_bps = sorted_bps[int((n - 1) * 0.95)] if n else 0
+        stats.append({
+            "InIfName": inif,
+            "ExporterName": exporter,
+            "Min": min_bps / 1e6,
+            "Max": max_bps / 1e6,
+            "Last": last_bps / 1e6,
+            "Average": avg_bps / 1e6,
+            "P95": p95_bps / 1e6,
+        })
+    stats.sort(key=lambda x: (x["ExporterName"], x["InIfName"]))
+    return series, stats, None
 
 
-def build_graph_png(timestamps: list[datetime], bps_list: list[float], period_label: str) -> io.BytesIO:
-    """Строит график битрейта (Mbps), возвращает PNG в BytesIO."""
+def build_graph_png_lines(
+    series: dict[tuple[str, str], list[tuple[datetime, float]]],
+    period_label: str,
+) -> io.BytesIO:
+    """Строит линейный график L2 бит/с по интерфейсам (ExporterName / InIfName)."""
     fig, ax = plt.subplots(figsize=(10, 5))
-    mbps = [b / 1e6 for b in bps_list]
-    ax.fill_between(timestamps, 0, mbps, alpha=0.4)
-    ax.plot(timestamps, mbps, color="C0", linewidth=1)
-    ax.set_ylabel("Мбит/с")
+    colors = plt.cm.tab10.colors
+    for i, ((exporter, inif), points) in enumerate(sorted(series.items())):
+        if not points:
+            continue
+        timestamps = [p[0] for p in points]
+        mbps = [p[1] / 1e6 for p in points]
+        label = "{} / {}".format(exporter, inif) if exporter else inif
+        ax.plot(timestamps, mbps, color=colors[i % len(colors)], linewidth=1.2, label=label)
+    ax.set_ylabel("Мбит/с (L2)")
     ax.set_xlabel("Время (UTC)")
-    ax.set_title("Трафик (InIfBoundary = external), период: {}".format(period_label))
+    ax.set_title("Трафик InIfBoundary = external, период: {}".format(period_label))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M", tz=timezone.utc))
     plt.xticks(rotation=25)
+    ax.legend(loc="upper left", fontsize=7)
     plt.grid(True, linestyle="--", alpha=0.5)
     plt.tight_layout()
     buf = io.BytesIO()
@@ -143,8 +186,29 @@ def build_graph_png(timestamps: list[datetime], bps_list: list[float], period_la
     return buf
 
 
-def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None]:
-    """Строит график за период. Возвращает (buf, None) или (None, error_message)."""
+def format_stats_caption(period_label: str, stats: list[dict], max_caption_len: int = 1020) -> str:
+    """Подпись: период + таблица InIfName, ExporterName, Min, Max, Last, Average, ~95th (Мбит/с)."""
+    lines = ["Период: {} (UTC). L2 Мбит/с".format(period_label)]
+    if not stats:
+        return lines[0]
+    header = "InIfName      | ExporterName | Min   | Max   | Last  | Avg   | ~95th"
+    lines.append(header)
+    for s in stats:
+        row = "{:<13} | {:<12} | {:>5.1f} | {:>5.1f} | {:>5.1f} | {:>5.1f} | {:>5.1f}".format(
+            (s["InIfName"] or "")[:13],
+            (s["ExporterName"] or "")[:12],
+            s["Min"], s["Max"], s["Last"], s["Average"], s["P95"],
+        )
+        lines.append(row)
+        if len("\n".join(lines)) > max_caption_len:
+            lines.pop()
+            lines.append("… (обрезано, всего {} интерфейсов)".format(len(stats)))
+            break
+    return "\n".join(lines)
+
+
+def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
+    """Строит график за период по интерфейсам (InIfName, ExporterName). Возвращает (buf, caption, None) или (None, None, error_message)."""
     _, label, hours, interval_sec = period_entry
     ch_cfg = config.get("clickhouse", {})
     url = ch_cfg.get("url", "http://localhost:8123")
@@ -152,14 +216,15 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
     boundary = ch_cfg.get("boundary_filter", "external")
     time_to = datetime.now(timezone.utc)
     time_from = time_to - timedelta(hours=hours)
-    timestamps, bps_list, err = fetch_bps_series(url, table, boundary, time_from, time_to, interval_sec)
+    series, stats, err = fetch_bps_by_interface(url, table, boundary, time_from, time_to, interval_sec)
     if err:
-        return None, err
+        return None, None, err
     try:
-        buf = build_graph_png(timestamps, bps_list, label)
-        return buf, None
+        buf = build_graph_png_lines(series, label)
+        caption = format_stats_caption(label, stats)
+        return buf, caption, None
     except Exception as e:
-        return None, "Ошибка построения графика: {}".format(e)
+        return None, None, "Ошибка построения графика: {}".format(e)
 
 
 async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -181,14 +246,14 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     _, label, _, _ = entry
     status_msg = await update.message.reply_text("Строю график за {}…".format(label))
-    buf, err = build_graph_for_period(config, entry)
+    buf, caption, err = build_graph_for_period(config, entry)
     if err:
         await status_msg.edit_text("Ошибка: {}".format(err))
         return
     await context.bot.send_photo(
         chat_id=update.effective_chat.id,
         photo=buf,
-        caption="Период: {} (UTC).".format(label),
+        caption=caption or "Период: {} (UTC).".format(label),
     )
     await status_msg.edit_text("График отправлен.")
 
@@ -244,14 +309,14 @@ async def on_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     _, label, _, _ = entry
     await query.edit_message_text("Строю график за {}…".format(label))
-    buf, err = build_graph_for_period(config, entry)
+    buf, caption, err = build_graph_for_period(config, entry)
     if err:
         await query.edit_message_text("Ошибка: {}".format(err))
         return
     await context.bot.send_photo(
         chat_id=update.effective_chat.id,
         photo=buf,
-        caption="Период: {} (UTC).".format(label),
+        caption=caption or "Период: {} (UTC).".format(label),
     )
     await query.edit_message_text("График отправлен.")
 
