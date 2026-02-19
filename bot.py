@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import re
 import sys
@@ -72,6 +73,74 @@ def is_chat_allowed(config: dict, chat_id: int | None) -> bool:
     if chat_id is None:
         return False
     return chat_id in allowed
+
+
+def _user_timezones_path(config: dict) -> str:
+    """Путь к JSON с поясами пользователей (из конфига или рядом с config.yaml)."""
+    path = config.get("_user_timezones_path")
+    if path:
+        return path
+    return os.path.join(os.path.dirname(config.get("_config_path", "")), "user_timezones.json")
+
+
+def _load_user_timezones(config: dict) -> dict:
+    """user_id (str) -> строка смещения, например '+3' или '-5'."""
+    path = _user_timezones_path(config)
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_user_timezone(config: dict, user_id: int, tz_str: str) -> bool:
+    """Сохранить пояс пользователя. Возвращает True при успехе."""
+    path = _user_timezones_path(config)
+    if not path:
+        return False
+    data = _load_user_timezones(config)
+    data[str(user_id)] = tz_str
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=0)
+        return True
+    except Exception:
+        return False
+
+
+def _parse_offset_input(text: str) -> tuple[int | None, str]:
+    """
+    Парсит ввод вида +3, -5, 0. Возвращает (offset_hours, "") или (None, "сообщение об ошибке").
+    Допустимый диапазон: -12..+14.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None, "Введите число, например +3 или -5."
+    m = re.match(r"^([+-]?\d{1,2})$", text)
+    if not m:
+        return None, "Формат: смещение от UTC в часах, например +3 или -5."
+    try:
+        h = int(m.group(1))
+    except ValueError:
+        return None, "Введите число от -12 до +14."
+    if h < -12 or h > 14:
+        return None, "Допустимый диапазон: от -12 до +14."
+    return h, ""
+
+
+def get_display_timezone_for_user(config: dict, user_id: int | None):
+    """Пояс для пользователя: из сохранённого, иначе из конфига, иначе UTC."""
+    if user_id is not None:
+        data = _load_user_timezones(config)
+        tz_str = data.get(str(user_id))
+        if tz_str is not None:
+            parsed, _ = _parse_offset_input(tz_str)
+            if parsed is not None:
+                return timezone(timedelta(hours=parsed))
+    return _get_display_timezone(config)
 
 
 def _tbl_sql(table: str) -> str:
@@ -297,10 +366,12 @@ def format_stats_caption(period_label: str, time_from: datetime, time_to: dateti
     return "Период: {}. Срез: {} L3".format(period_label, _fmt_time_range(time_from, time_to, display_tz))
 
 
-def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
-    """Строит график за период по интерфейсам (InIfName, ExporterName). Возвращает (buf, caption, None) или (None, None, error_message)."""
+def build_graph_for_period(
+    config: dict, period_entry: tuple, user_id: int | None = None
+) -> tuple[io.BytesIO | None, str | None, str | None]:
+    """Строит график за период. user_id — для выбора пояса пользователя; иначе конфиг/UTC."""
     key, label, hours, interval_sec = period_entry
-    display_tz = _get_display_timezone(config)
+    display_tz = get_display_timezone_for_user(config, user_id)
     ch_cfg = config.get("clickhouse", {})
     url = ch_cfg.get("url", "http://127.0.0.1:8123")
     boundary = ch_cfg.get("boundary_filter", "external")
@@ -348,7 +419,8 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     _, label, _, _ = entry
     status_msg = await update.message.reply_text("Строю график за {}…".format(label))
-    buf, caption, err = build_graph_for_period(config, entry)
+    user_id = update.effective_user.id if update.effective_user else None
+    buf, caption, err = build_graph_for_period(config, entry, user_id)
     if err:
         await status_msg.edit_text("Ошибка: {}".format(err))
         return
@@ -367,27 +439,10 @@ async def cmd_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     keyboard = [
         [InlineKeyboardButton(label, callback_data="period_" + key) for key, label, _, _ in PERIODS],
+        [InlineKeyboardButton("Настройки", callback_data="settings")],
     ]
     await update.message.reply_text(
         "Выберите период для графика трафика (Akvorado / ClickHouse):",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-
-async def on_text_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.message.text:
-        return
-    text = (update.message.text or "").strip().lower()
-    if text != "график":
-        return
-    config = context.bot_data.get("config") or {}
-    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
-        return
-    keyboard = [
-        [InlineKeyboardButton(label, callback_data="period_" + key) for key, label, _, _ in PERIODS],
-    ]
-    await update.message.reply_text(
-        "Выберите период:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
@@ -408,7 +463,8 @@ async def on_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     _, label, _, _ = entry
     await query.edit_message_text("Строю график за {}…".format(label))
-    buf, caption, err = build_graph_for_period(config, entry)
+    user_id = update.effective_user.id if update.effective_user else None
+    buf, caption, err = build_graph_for_period(config, entry, user_id)
     if err:
         await query.edit_message_text("Ошибка: {}".format(err))
         return
@@ -418,6 +474,74 @@ async def on_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         caption=caption or "Период: {} (UTC).".format(label),
     )
     await query.edit_message_text("График отправлен.")
+
+
+async def on_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопка «Настройки»: просим ввести пояс в формате +3 или -5."""
+    query = update.callback_query
+    await query.answer()
+    if not query.data or query.data != "settings":
+        return
+    config = context.bot_data.get("config") or {}
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
+        await query.edit_message_text("Недоступно в этом чате.")
+        return
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is not None:
+        context.bot_data.setdefault("pending_timezone", set()).add(user_id)
+    keyboard = [[InlineKeyboardButton("Отмена", callback_data="tz_cancel")]]
+    await query.edit_message_text(
+        "Введите ваш часовой пояс: смещение от UTC в часах, например +3 или -5. По умолчанию UTC.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def on_tz_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отмена ввода пояса."""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is not None:
+        context.bot_data.get("pending_timezone", set()).discard(user_id)
+    await query.edit_message_text("Отменено.")
+
+
+async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Текст: либо ввод пояса (если пользователь в ожидании), либо «график» → меню."""
+    if not update.message or not update.message.text:
+        return
+    user_id = update.effective_user.id if update.effective_user else None
+    pending = context.bot_data.get("pending_timezone", set())
+    if user_id is not None and user_id in pending:
+        pending.discard(user_id)
+        config = context.bot_data.get("config") or {}
+        text = (update.message.text or "").strip()
+        offset, err = _parse_offset_input(text)
+        if err:
+            await update.message.reply_text(err)
+            context.bot_data.setdefault("pending_timezone", set()).add(user_id)
+            return
+        tz_str = "{:+d}".format(offset) if offset != 0 else "0"
+        if _save_user_timezone(config, user_id, tz_str):
+            label = "UTC" if offset == 0 else "UTC{:+d}".format(offset)
+            await update.message.reply_text("Сохранено. Ваш часовой пояс: {} (графики будут в этом поясе).".format(label))
+        else:
+            await update.message.reply_text("Не удалось сохранить настройку (проверьте путь к файлу в конфиге).")
+        return
+    text = (update.message.text or "").strip().lower()
+    if text != "график":
+        return
+    config = context.bot_data.get("config") or {}
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
+        return
+    keyboard = [
+        [InlineKeyboardButton(label, callback_data="period_" + key) for key, label, _, _ in PERIODS],
+        [InlineKeyboardButton("Настройки", callback_data="settings")],
+    ]
+    await update.message.reply_text(
+        "Выберите период:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 def main() -> int:
@@ -441,6 +565,10 @@ def main() -> int:
     config.setdefault("telegram", {})
     config.setdefault("clickhouse", {"url": "http://127.0.0.1:8123", "table": "default.flows", "boundary_filter": "external"})
     apply_env_overrides(config)
+    config["_config_path"] = args.config
+    config["_user_timezones_path"] = (config.get("telegram") or {}).get("user_timezones_file") or os.path.join(
+        os.path.dirname(args.config), "user_timezones.json"
+    )
 
     token = (config.get("telegram") or {}).get("bot_token")
     if not token:
@@ -464,14 +592,17 @@ def main() -> int:
         .build()
     )
     app.bot_data["config"] = config
+    app.bot_data["pending_timezone"] = set()
 
     app.add_handler(CommandHandler("graph_1h", cmd_period))
     app.add_handler(CommandHandler("graph_6h", cmd_period))
     app.add_handler(CommandHandler("graph_24h", cmd_period))
     app.add_handler(CommandHandler("graph_7d", cmd_period))
     app.add_handler(CommandHandler("graph", cmd_graph))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_graph))
-    app.add_handler(CallbackQueryHandler(on_period_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
+    app.add_handler(CallbackQueryHandler(on_period_callback, pattern="^period_"))
+    app.add_handler(CallbackQueryHandler(on_settings_callback, pattern="^settings$"))
+    app.add_handler(CallbackQueryHandler(on_tz_cancel_callback, pattern="^tz_cancel$"))
 
     print("Бот запущен. В меню — периоды (1 ч, 6 ч, 24 ч, 7 д); нажал — график в чат.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

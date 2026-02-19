@@ -7,6 +7,8 @@ telegram:
   bot_token: "123456:ABC-DEF..."   # от @BotFather
   # Опционально: только эти чаты могут вызывать команды (пусто = бот отвечает в любом чате; для продакшена лучше задать список).
   # allowed_chat_ids: [ 123456789, -987654321 ]
+  # Файл с часовыми поясами пользователей (кнопка «Настройки» → ввод +3 / -5). По умолчанию — рядом с config.yaml. Для Docker с persistence: том ./data:/data и путь:
+  # user_timezones_file: "/data/user_timezones.json"
 
 clickhouse:
   url: "http://127.0.0.1:8123"
