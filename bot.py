@@ -132,18 +132,27 @@ def fetch_bps_by_interface(
     if not series:
         return {}, [], "За выбранный период данных нет (InIfBoundary = {}).".format(boundary)
 
+    # При расчёте Min/Last/Avg/p95 обрезаем края (хвосты и головы), чтобы не занижать из-за неполных интервалов
+    trim_buckets = 2
     stats = []
     for (exporter, inif), points in series.items():
         if not points:
             continue
         bps_vals = [p[1] for p in points]
         n = len(bps_vals)
-        min_bps = min(bps_vals)
-        max_bps = max(bps_vals)
-        last_bps = bps_vals[-1]
-        avg_bps = sum(bps_vals) / n
-        sorted_bps = sorted(bps_vals)
-        p95_bps = sorted_bps[int((n - 1) * 0.95)] if n else 0
+        if n > trim_buckets * 2:
+            trimmed = bps_vals[trim_buckets:-trim_buckets]
+        else:
+            trimmed = bps_vals
+        if not trimmed:
+            trimmed = bps_vals
+        n_t = len(trimmed)
+        min_bps = min(trimmed)
+        max_bps = max(trimmed)
+        last_bps = trimmed[-1]
+        avg_bps = sum(trimmed) / n_t
+        sorted_bps = sorted(trimmed)
+        p95_bps = sorted_bps[int((n_t - 1) * 0.95)] if n_t else 0
         stats.append({
             "InIfName": inif,
             "ExporterName": exporter,
