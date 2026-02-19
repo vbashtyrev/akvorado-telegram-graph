@@ -83,7 +83,8 @@ def fetch_bps_by_interface(
 ) -> tuple[dict[tuple[str, str], list[tuple[datetime, float]]], list[dict], str | None]:
     """
     Запрос в ClickHouse: InIfBoundary = boundary, группировка по ExporterName, InIfName.
-    bytes_expression: формула байт для bps (L2 по умолчанию; для L3 как в консоли — см. config).
+    bytes_expression: формула байт для bps. По умолчанию Bytes*SamplingRate — в консоли Akvorado
+    это и есть L3 (console/clickhouse.go: l3bps = SUM(Bytes*SamplingRate*8)).
     """
     tbl_sql = _tbl_sql(table)
     bytes_expr = (bytes_expression or "Bytes * coalesce(SamplingRate, 1)").strip()
