@@ -1,110 +1,90 @@
 # Графики Akvorado (ClickHouse) в Telegram
 
-Бот: в меню — периоды (1 ч, 6 ч, 24 ч, 7 д); нажал пункт — сразу график трафика из ClickHouse (Akvorado) в чат (битрейт, InIfBoundary = external).
+Телеграм-бот: в меню периоды **1 ч**, **6 ч**, **24 ч**, **7 д** — нажал пункт, бот присылает график трафика (битрейт по интерфейсам, InIfBoundary = external) и таблицу Min/Max/Last/Avg. Данные из ClickHouse (Akvorado).
 
-ClickHouse должен быть уже запущен (в другом проекте; порт 8123 на хосте). В этом репозитории — только контейнер с ботом.
+ClickHouse должен быть уже развёрнут отдельно (порт 8123 на хосте). В репозитории — только образ и конфиг бота.
 
 ---
 
-## Запуск на сервере (с нуля)
+## Запуск (с нуля)
 
-На сервере должны быть установлены Docker и docker compose v2. ClickHouse уже должен быть доступен (например, в другом контейнере с пробросом порта 8123 на хост).
+Нужны: Docker, docker compose v2, работающий ClickHouse (например, в другом контейнере с портом 8123 на хосте).
 
-**1. Скачать репозиторий и перейти в каталог**
+**1. Каталог проекта**
 
-Если установлен **git**:
-
+С git:
 ```bash
 git clone https://github.com/vbashtyrev/akvorado-telegram-graph.git
 cd akvorado-telegram-graph
 ```
 
-Если **git нет** — скачать архив через **curl** (есть по умолчанию в AlmaLinux и других) и распаковать **tar**:
-
+Без git (curl + tar):
 ```bash
 curl -L -o main.tar.gz https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.tar.gz
 tar xzf main.tar.gz
 cd akvorado-telegram-graph-main
 ```
 
-То же через wget (если установлен): `wget -O main.tar.gz https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.tar.gz`
-
-Дальнейшие шаги те же: создать `.env` и `config.yaml`, заполнить, запустить `docker compose up -d`.
-
-**2. Создать конфиг из примеров:**
+**2. Конфиг**
 
 ```bash
 cp .env.example .env
 cp config.example.yaml config.yaml
 ```
 
-**3. Заполнить `.env`** (токен от [@BotFather](https://t.me/BotFather); при необходимости — ID группы, куда писать):
+В `.env` задать:
+- **TELEGRAM_BOT_TOKEN** — токен от [@BotFather](https://t.me/BotFather) (обязательно).
+- **TELEGRAM_ALLOWED_CHAT_IDS** — ID чата/группы (группа — отрицательное число), через запятую несколько; пусто — бот отвечает в любом чате.
+- **CLICKHOUSE_URL** — по умолчанию `http://127.0.0.1:8123`. Бот запущен с `network_mode: host`, поэтому видит тот же хост; если ClickHouse на другом адресе — указать здесь.
 
-```bash
-nano .env
-```
-
-Указать:
-- `TELEGRAM_BOT_TOKEN=...` — обязательно.
-- `TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890` — опционально; ID группы (отрицательное число). Несколько через запятую. Пусто — бот отвечает в любом чате.
-- `CLICKHOUSE_URL` — по умолчанию в compose уже задан `http://host.docker.internal:8123` (ClickHouse на этом же хосте, порт 8123). Если ClickHouse на другом адресе — задать здесь.
-
-**4. Запустить бота:**
+**3. Запуск**
 
 ```bash
 docker compose up -d
 ```
 
-**5. Проверить логи:**
+Логи: `docker compose logs -f bot`. В Telegram: меню бота → «1 ч» / «6 ч» / «24 ч» / «7 д» → приходит график и таблица.
 
-```bash
-docker compose logs -f bot
-```
-
-В Telegram: открой меню бота (кнопка слева от поля ввода) — пункты «1 ч», «6 ч», «24 ч», «7 д»; нажал — бот пришлёт график.
-
-Перезапуск: `docker compose restart bot`. Остановка: `docker compose down`.
+Остановка: `docker compose down`. Перезапуск: `docker compose restart bot`.
 
 ---
 
-## Обновление кода на сервере
+## Обновление
 
-**Если ставили через git:** зайти в каталог, подтянуть изменения, пересобрать контейнер:
-
+**Установка через git:**
 ```bash
 cd akvorado-telegram-graph
 git pull
 docker compose up -d --build
 ```
 
-**Если ставили через архив (без git):** скачать новый архив, распаковать в новую папку, скопировать туда свой `.env` и `config.yaml`, затем из новой папки запустить `docker compose up -d --build`. Старый каталог можно удалить.
-
-`--build` пересоберёт образ с новым кодом. Логи: `docker compose logs -f bot`.
+**Установка через архив:** скачать новый архив, распаковать в новую папку, скопировать туда `.env` и `config.yaml`, из новой папки выполнить `docker compose up -d --build`.
 
 ---
 
 ## Конфигурация
 
-- **TELEGRAM_BOT_TOKEN** — токен от [@BotFather](https://t.me/BotFather) (обязательно).
-- **TELEGRAM_ALLOWED_CHAT_IDS** — ID чатов/групп через запятую (группа — отрицательное число); пусто = бот отвечает в любом чате.
-- **CLICKHOUSE_URL** — URL ClickHouse (по умолчанию `http://127.0.0.1:8123`). Бот в Docker запущен с `network_mode: host`, поэтому видит тот же 127.0.0.1, что и хост (подходит, если ClickHouse проброшен как 127.0.0.1:8123).
+Переменные окружения (в `.env` или в `environment` compose) можно дублировать в `config.yaml` (секции `telegram`, `clickhouse`). Окружение переопределяет файл.
 
-То же можно задать в `config.yaml` (секции `telegram` и `clickhouse`). Переменные окружения переопределяют значения из файла.
+- **TELEGRAM_BOT_TOKEN** — обязательно.
+- **TELEGRAM_ALLOWED_CHAT_IDS** — список ID через запятую; пусто = любой чат.
+- **CLICKHOUSE_URL** — по умолчанию `http://127.0.0.1:8123` (при `network_mode: host` бот обращается к ClickHouse на хосте).
 
-**Цифры за 7 д (Min/Max) не совпадают с консолью?** В консоли Akvorado данные для длинных периодов берутся из **агрегированных таблиц** (исходник `console/clickhouse.go`: таблицы `flows%`, resolution из имени, например `flows_1h0m0s`). L3 в UI = `Bytes*SamplingRate` (без вычитания заголовков). Чтобы бот совпадал с UI: задайте в `config.yaml` (секция `clickhouse`) для 24 ч и 7 д ту же таблицу и интервал — обычно `table_24h: "default.flows_1h0m0s"` и `interval_sec_24h: 3600`. Для 6 ч — `table_6h: "default.flows_1m0s"`, `interval_sec_6h: 60`. Если агрегированных таблиц нет, Min в боте будет ниже (минимум по более мелким корзинам). Перезапустите бота после правки.
+В `config.yaml` также задаётся часовой пояс графиков (`display_timezone`), таблицы и интервалы для 6 ч / 24 ч (см. `config.example.yaml`).
 
-**Изменили `.env` или `config.yaml`?** Бот подхватывает конфиг только при старте. Перезапустите контейнер:
-```bash
-docker compose restart bot
-```
+**Совпадение Min/Max с консолью Akvorado**  
+Консоль для длинных периодов использует агрегированные таблицы (например `flows_1h0m0s` с интервалом 3600 с). Чтобы цифры в боте совпадали с UI, в секции `clickhouse` укажите те же таблицу и интервал: для 24 ч и 7 д — обычно `table_24h: "default.flows_1h0m0s"`, `interval_sec_24h: 3600`; для 6 ч — `table_6h: "default.flows_1m0s"`, `interval_sec_6h: 60`. Список таблиц в БД: `SELECT name FROM system.tables WHERE name LIKE 'flows%' AND name NOT LIKE '%_local';`
+
+После смены `.env` или `config.yaml` нужен перезапуск: `docker compose restart bot`.
 
 ---
 
-## Проверка доступности ClickHouse
+## Проверка ClickHouse
 
-Бот запущен с **network_mode: host**, поэтому использует сеть хоста и обращается к ClickHouse по `127.0.0.1:8123` так же, как с самого хоста. Достаточно, чтобы на хосте отвечал порт 8123:
+Бот с `network_mode: host` стучится на `127.0.0.1:8123`. Проверка с хоста:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8123/ping
 ```
-Ожидается `200`. Если бот пишет Connection refused — проверьте, что контейнер ClickHouse запущен и порт проброшен как `127.0.0.1:8123->8123`.
+
+Ожидается `200`. При ошибках соединения — убедиться, что ClickHouse слушает 8123 и доступен на хосте.
