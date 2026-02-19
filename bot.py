@@ -78,6 +78,7 @@ def fetch_bps_by_interface(
     time_from: datetime,
     time_to: datetime,
     interval_sec: int,
+    period_hours: float = 1,
 ) -> tuple[dict[tuple[str, str], list[tuple[datetime, float]]], list[dict], str | None]:
     """
     Запрос в ClickHouse: InIfBoundary = boundary, группировка по ExporterName, InIfName.
@@ -136,8 +137,8 @@ def fetch_bps_by_interface(
     if not series:
         return {}, [], "За выбранный период данных нет (InIfBoundary = {}).".format(boundary)
 
-    # Обрезка краёв (хвосты/головы): 1 интервал с каждого конца — неполные краевые интервалы не тянут Min/Last вниз
-    trim_buckets = 1
+    # Обрезка краёв: для 1 ч/6 ч — 1 интервал (неполные минуты по краям). Для 24 ч/7 д не обрезаем — чтобы Min совпадал с UI (770 Мбит и т.д.)
+    trim_buckets = 0 if period_hours >= 24 else 1
     stats = []
     for (exporter, inif), points in series.items():
         if not points:
@@ -304,7 +305,7 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
         table = ch_cfg.get("table", "default.flows")
     time_to = datetime.now(timezone.utc)
     time_from = time_to - timedelta(hours=hours)
-    series, stats, err = fetch_bps_by_interface(url, table, boundary, time_from, time_to, interval_sec)
+    series, stats, err = fetch_bps_by_interface(url, table, boundary, time_from, time_to, interval_sec, period_hours=hours)
     if err:
         return None, None, err
     try:
