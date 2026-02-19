@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -58,6 +59,9 @@ def apply_env_overrides(config: dict) -> None:
     ch_url = os.environ.get("CLICKHOUSE_URL")
     if ch_url:
         config.setdefault("clickhouse", {})["url"] = ch_url.rstrip("/")
+    tz_env = os.environ.get("DISPLAY_TIMEZONE")
+    if tz_env:
+        config["display_timezone"] = tz_env.strip()
 
 
 def _tbl_sql(table: str) -> str:
@@ -173,12 +177,43 @@ def _fmt_gbps(val: float) -> str:
     return "{:.2f}Mbps".format(val * 1000)
 
 
-def _fmt_time_range(time_from: datetime, time_to: datetime) -> str:
-    """Формат времени среза для подписи и графика."""
-    return "{} — {} UTC".format(
-        time_from.strftime("%d.%m %H:%M"),
-        time_to.strftime("%d.%m %H:%M"),
-    )
+def _get_display_timezone(config: dict):
+    """Читает display_timezone из конфига: GMT+5, UTC+5, Asia/Almaty и т.д. По умолчанию UTC."""
+    tz_str = (config.get("display_timezone") or "UTC").strip()
+    if not tz_str or tz_str.upper() in ("UTC", "UTC+0", "GMT+0"):
+        return timezone.utc
+    m = re.match(r"^(?:UTC|GMT)?([+-])(\d{1,2})(?::(\d{2}))?$", tz_str, re.I)
+    if m:
+        sign, h, mm = m.group(1), int(m.group(2)), int(m.group(3) or 0)
+        delta = timedelta(hours=h, minutes=mm) if sign == "+" else timedelta(hours=-h, minutes=-mm)
+        return timezone(delta)
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(tz_str)
+    except Exception:
+        return timezone.utc
+
+
+def _tz_label(display_tz) -> str:
+    """Подпись пояса для осей и подписи (GMT+5, UTC и т.д.)."""
+    if display_tz == timezone.utc:
+        return "UTC"
+    utcoff = display_tz.utcoffset(None)
+    if utcoff is None:
+        return str(display_tz)
+    sec = int(utcoff.total_seconds())
+    h, r = divmod(abs(sec), 3600)
+    m = r // 60
+    sign = "+" if sec >= 0 else "-"
+    return "GMT{}{}:{:02d}".format(sign, h, m) if m else "GMT{}{}".format(sign, h)
+
+
+def _fmt_time_range(time_from: datetime, time_to: datetime, display_tz) -> str:
+    """Формат времени среза в заданном поясе."""
+    tz_label = _tz_label(display_tz)
+    f = time_from.astimezone(display_tz)
+    t = time_to.astimezone(display_tz)
+    return "{} — {} {}".format(f.strftime("%d.%m %H:%M"), t.strftime("%d.%m %H:%M"), tz_label)
 
 
 def build_graph_png_lines(
@@ -187,10 +222,12 @@ def build_graph_png_lines(
     stats: list[dict],
     time_from: datetime,
     time_to: datetime,
+    display_tz,
 ) -> io.BytesIO:
     """Строит график L2 (линии по интерфейсам) и таблицу Min/Max/Last/Avg/~95th в Gbps на одном изображении."""
     from matplotlib import gridspec
-    time_range_str = _fmt_time_range(time_from, time_to)
+    time_range_str = _fmt_time_range(time_from, time_to, display_tz)
+    tz_label = _tz_label(display_tz)
     n_table_rows = len(stats) + 1
     fig = plt.figure(figsize=(12, 4 + n_table_rows * 0.35))
     gs = gridspec.GridSpec(2, 1, height_ratios=[1.2, 0.8], hspace=0.35)
@@ -204,9 +241,9 @@ def build_graph_png_lines(
         label = "{} / {}".format(exporter, inif) if exporter else inif
         ax.plot(timestamps, gbps, color=colors[i % len(colors)], linewidth=1.2, label=label)
     ax.set_ylabel("Gbps (L2)")
-    ax.set_xlabel("Время (UTC)")
+    ax.set_xlabel("Время ({})".format(tz_label))
     ax.set_title("Трафик InIfBoundary = external, период: {}\nСрез: {}".format(period_label, time_range_str), fontsize=10)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M", tz=timezone.utc))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M", tz=display_tz))
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=25)
     ax.legend(loc="upper left", fontsize=7)
     ax.grid(True, linestyle="--", alpha=0.5)
@@ -244,14 +281,15 @@ def build_graph_png_lines(
     return buf
 
 
-def format_stats_caption(period_label: str, time_from: datetime, time_to: datetime) -> str:
-    """Подпись: период и точное время среза (с — по)."""
-    return "Период: {}. Срез: {} L2".format(period_label, _fmt_time_range(time_from, time_to))
+def format_stats_caption(period_label: str, time_from: datetime, time_to: datetime, display_tz) -> str:
+    """Подпись: период и точное время среза (с — по) в заданном поясе."""
+    return "Период: {}. Срез: {} L2".format(period_label, _fmt_time_range(time_from, time_to, display_tz))
 
 
 def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
     """Строит график за период по интерфейсам (InIfName, ExporterName). Возвращает (buf, caption, None) или (None, None, error_message)."""
     key, label, hours, interval_sec = period_entry
+    display_tz = _get_display_timezone(config)
     ch_cfg = config.get("clickhouse", {})
     url = ch_cfg.get("url", "http://127.0.0.1:8123")
     boundary = ch_cfg.get("boundary_filter", "external")
@@ -267,8 +305,8 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
     if err:
         return None, None, err
     try:
-        buf = build_graph_png_lines(series, label, stats, time_from, time_to)
-        caption = format_stats_caption(label, time_from, time_to)
+        buf = build_graph_png_lines(series, label, stats, time_from, time_to, display_tz)
+        caption = format_stats_caption(label, time_from, time_to, display_tz)
         return buf, caption, None
     except Exception as e:
         return None, None, "Ошибка построения графика: {}".format(e)

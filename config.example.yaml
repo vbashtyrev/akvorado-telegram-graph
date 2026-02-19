@@ -1,5 +1,8 @@
 # Конфиг бота «график Akvorado в Telegram»
 
+# Часовой пояс для всех графиков (ось времени, срез «с — по»). По умолчанию UTC.
+# display_timezone: "GMT+5"   # или "UTC+5", "Asia/Almaty", "Etc/GMT-5"
+
 telegram:
   bot_token: "123456:ABC-DEF..."   # от @BotFather
   # Опционально: только эти чаты могут вызывать /graph (пусто = любой)
