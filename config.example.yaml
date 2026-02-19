@@ -16,6 +16,9 @@ clickhouse:
 
   # Таблица и фильтр как в UI Akvorado (InIfBoundary = external)
   table: "default.flows"
+  # Метрика: L2 (по умолчанию) или L3 как в консоли (L3ᵇ⁄ₛ). Для L3 — байты без заголовков кадра:
+  # bytes_expression: "greatest(0, Bytes - 18 * Packets) * coalesce(SamplingRate, 1)"
+  # (18 байт ≈ Ethernet 14 + FCS 4; при VLAN можно 22)
   # Консоль для длинных периодов использует агрегированные таблицы. Если цифры расходятся с UI:
   # для 6 ч часто берут flows_1m0s (интервал 60 с):
   # table_6h: "default.flows_1m0s"

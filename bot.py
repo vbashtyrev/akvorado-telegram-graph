@@ -79,15 +79,14 @@ def fetch_bps_by_interface(
     time_to: datetime,
     interval_sec: int,
     period_hours: float = 1,
+    bytes_expression: str | None = None,
 ) -> tuple[dict[tuple[str, str], list[tuple[datetime, float]]], list[dict], str | None]:
     """
     Запрос в ClickHouse: InIfBoundary = boundary, группировка по ExporterName, InIfName.
-    Возвращает (series, stats, error).
-    series: (ExporterName, InIfName) -> [(minute, bps), ...]
-    stats: список dict с ключами InIfName, ExporterName, Min, Max, Last, Average, P95 (Мбит/с).
+    bytes_expression: формула байт для bps (L2 по умолчанию; для L3 как в консоли — см. config).
     """
     tbl_sql = _tbl_sql(table)
-    bytes_expr = "Bytes * coalesce(SamplingRate, 1)"
+    bytes_expr = (bytes_expression or "Bytes * coalesce(SamplingRate, 1)").strip()
     where_extra = "WHERE InIfBoundary = '{}' ".format(str(boundary).replace("'", "''"))
     tz_suffix = ", 'UTC'"
     from_ts = time_from.strftime("%Y-%m-%d %H:%M:%S")
@@ -225,7 +224,7 @@ def build_graph_png_lines(
     time_to: datetime,
     display_tz,
 ) -> io.BytesIO:
-    """Строит график L2 (линии по интерфейсам) и таблицу Min/Max/Last/Avg/~95th в Gbps на одном изображении."""
+    """Строит график L3 (линии по интерфейсам) и таблицу Min/Max/Last/Avg/~95th в Gbps на одном изображении."""
     from matplotlib import gridspec
     time_range_str = _fmt_time_range(time_from, time_to, display_tz)
     tz_label = _tz_label(display_tz)
@@ -241,7 +240,7 @@ def build_graph_png_lines(
         gbps = [p[1] / 1e9 for p in points]
         label = "{} / {}".format(exporter, inif) if exporter else inif
         ax.plot(timestamps, gbps, color=colors[i % len(colors)], linewidth=1.2, label=label)
-    ax.set_ylabel("Gbps (L2)")
+    ax.set_ylabel("Gbps (L3)")
     ax.set_xlabel("Время ({})".format(tz_label))
     ax.set_title("Трафик InIfBoundary = external, период: {}\nСрез: {}".format(period_label, time_range_str), fontsize=10)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M", tz=display_tz))
@@ -284,7 +283,7 @@ def build_graph_png_lines(
 
 def format_stats_caption(period_label: str, time_from: datetime, time_to: datetime, display_tz) -> str:
     """Подпись: период и точное время среза (с — по) в заданном поясе."""
-    return "Период: {}. Срез: {} L2".format(period_label, _fmt_time_range(time_from, time_to, display_tz))
+    return "Период: {}. Срез: {} L3".format(period_label, _fmt_time_range(time_from, time_to, display_tz))
 
 
 def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
@@ -305,7 +304,11 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
         table = ch_cfg.get("table", "default.flows")
     time_to = datetime.now(timezone.utc)
     time_from = time_to - timedelta(hours=hours)
-    series, stats, err = fetch_bps_by_interface(url, table, boundary, time_from, time_to, interval_sec, period_hours=hours)
+    bytes_expr = ch_cfg.get("bytes_expression")
+    series, stats, err = fetch_bps_by_interface(
+        url, table, boundary, time_from, time_to, interval_sec,
+        period_hours=hours, bytes_expression=bytes_expr,
+    )
     if err:
         return None, None, err
     try:
