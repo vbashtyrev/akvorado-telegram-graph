@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram-бот: график трафика Akvorado (ClickHouse) с выбором периода.
-Меню бота или /graph, или «График» → кнопки 1 ч / 6 ч / 24 ч / 7 д → запрос в CH → картинка в чат.
+В меню бота — периоды (1 ч, 6 ч, 24 ч, 7 д); нажал → сразу график в чат.
 """
 from __future__ import annotations
 
@@ -143,6 +143,56 @@ def build_graph_png(timestamps: list[datetime], bps_list: list[float], period_la
     return buf
 
 
+def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None]:
+    """Строит график за период. Возвращает (buf, None) или (None, error_message)."""
+    _, label, hours, interval_sec = period_entry
+    ch_cfg = config.get("clickhouse", {})
+    url = ch_cfg.get("url", "http://localhost:8123")
+    table = ch_cfg.get("table", "default.flows")
+    boundary = ch_cfg.get("boundary_filter", "external")
+    time_to = datetime.now(timezone.utc)
+    time_from = time_to - timedelta(hours=hours)
+    timestamps, bps_list, err = fetch_bps_series(url, table, boundary, time_from, time_to, interval_sec)
+    if err:
+        return None, err
+    try:
+        buf = build_graph_png(timestamps, bps_list, label)
+        return buf, None
+    except Exception as e:
+        return None, "Ошибка построения графика: {}".format(e)
+
+
+async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда вида /graph_1h, /graph_6h, /graph_24h, /graph_7d — сразу отправить график."""
+    if not update.message or not update.message.text:
+        return
+    cmd = (update.message.text or "").strip().split()[0].lower()
+    if not cmd.startswith("/graph_"):
+        return
+    key = cmd.replace("/graph_", "", 1)
+    entry = next((p for p in PERIODS if p[0] == key), None)
+    if not entry:
+        await update.message.reply_text("Неизвестный период.")
+        return
+    config = context.bot_data.get("config") or {}
+    allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
+    if allowed and update.effective_chat and update.effective_chat.id not in allowed:
+        await update.message.reply_text("Команда недоступна в этом чате.")
+        return
+    _, label, _, _ = entry
+    status_msg = await update.message.reply_text("Строю график за {}…".format(label))
+    buf, err = build_graph_for_period(config, entry)
+    if err:
+        await status_msg.edit_text("Ошибка: {}".format(err))
+        return
+    await context.bot.send_photo(
+        chat_id=update.effective_chat.id,
+        photo=buf,
+        caption="Период: {} (UTC).".format(label),
+    )
+    await status_msg.edit_text("График отправлен.")
+
+
 async def cmd_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config = context.bot_data.get("config") or {}
     allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
@@ -188,34 +238,16 @@ async def on_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if allowed and update.effective_chat and update.effective_chat.id not in allowed:
         await query.edit_message_text("Недоступно в этом чате.")
         return
-
     entry = next((p for p in PERIODS if p[0] == key), None)
     if not entry:
         await query.edit_message_text("Неизвестный период.")
         return
-    _, label, hours, interval_sec = entry
-
-    ch_cfg = config.get("clickhouse", {})
-    url = ch_cfg.get("url", "http://localhost:8123")
-    table = ch_cfg.get("table", "default.flows")
-    boundary = ch_cfg.get("boundary_filter", "external")
-
-    time_to = datetime.now(timezone.utc)
-    time_from = time_to - timedelta(hours=hours)
-
-    await query.edit_message_text("Запрашиваю данные за {}…".format(label))
-
-    timestamps, bps_list, err = fetch_bps_series(url, table, boundary, time_from, time_to, interval_sec)
+    _, label, _, _ = entry
+    await query.edit_message_text("Строю график за {}…".format(label))
+    buf, err = build_graph_for_period(config, entry)
     if err:
         await query.edit_message_text("Ошибка: {}".format(err))
         return
-
-    try:
-        buf = build_graph_png(timestamps, bps_list, label)
-    except Exception as e:
-        await query.edit_message_text("Ошибка построения графика: {}".format(e))
-        return
-
     await context.bot.send_photo(
         chat_id=update.effective_chat.id,
         photo=buf,
@@ -252,9 +284,12 @@ def main() -> int:
         return 1
 
     async def post_init(application: Application) -> None:
-        """Меню бота: команды и кнопка меню (вместо ввода /graph)."""
+        """Меню бота: сразу периоды (нажал — получил график)."""
         await application.bot.set_my_commands([
-            BotCommand("graph", "График трафика за период"),
+            BotCommand("graph_1h", "1 ч"),
+            BotCommand("graph_6h", "6 ч"),
+            BotCommand("graph_24h", "24 ч"),
+            BotCommand("graph_7d", "7 д"),
         ])
         await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
@@ -266,11 +301,15 @@ def main() -> int:
     )
     app.bot_data["config"] = config
 
+    app.add_handler(CommandHandler("graph_1h", cmd_period))
+    app.add_handler(CommandHandler("graph_6h", cmd_period))
+    app.add_handler(CommandHandler("graph_24h", cmd_period))
+    app.add_handler(CommandHandler("graph_7d", cmd_period))
     app.add_handler(CommandHandler("graph", cmd_graph))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_graph))
     app.add_handler(CallbackQueryHandler(on_period_callback))
 
-    print("Бот запущен. Меню (кнопка слева от поля ввода) или /graph, или «График» — выбор периода.")
+    print("Бот запущен. В меню — периоды (1 ч, 6 ч, 24 ч, 7 д); нажал — график в чат.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
     return 0
 
