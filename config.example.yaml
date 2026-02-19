@@ -1,0 +1,17 @@
+# Конфиг бота «график Akvorado в Telegram»
+
+telegram:
+  bot_token: "123456:ABC-DEF..."   # от @BotFather
+  # Опционально: только эти чаты могут вызывать /graph (пусто = любой)
+  # allowed_chat_ids: [ 123456789, -987654321 ]
+
+clickhouse:
+  url: "http://localhost:8123"
+  # Если ClickHouse на другом хосте — поднимите туннель: ssh -L 8123:127.0.0.1:8123 user@server
+  # user: ""
+  # password: ""
+
+  # Таблица и фильтр как в UI Akvorado (InIfBoundary = external)
+  table: "default.flows"
+  # Для длинных периодов (7д) можно указать агрегированную таблицу (например flows_5m0s) и interval_sec: 300
+  boundary_filter: "external"   # только внешний трафик

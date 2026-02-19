@@ -1,0 +1,19 @@
+# Akvorado Telegram Graph Bot (только бот; ClickHouse — в другом проекте/контейнере)
+# Использование: cp .env.example .env, задать TELEGRAM_BOT_TOKEN и при необходимости TELEGRAM_ALLOWED_CHAT_IDS и CLICKHOUSE_URL, затем:
+#   docker compose up -d
+
+services:
+  bot:
+    build: .
+    image: akvorado-telegram-graph:latest
+    container_name: akvorado-telegram-graph
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # ClickHouse в другом контейнере: с хоста доступен как 127.0.0.1:8123 → из контейнера через host.docker.internal
+      CLICKHOUSE_URL: http://host.docker.internal:8123
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    # Linux: чтобы host.docker.internal работал (Docker Desktop добавляет сам)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
