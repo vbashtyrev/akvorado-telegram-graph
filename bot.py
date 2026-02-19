@@ -173,13 +173,24 @@ def _fmt_gbps(val: float) -> str:
     return "{:.2f}Mbps".format(val * 1000)
 
 
+def _fmt_time_range(time_from: datetime, time_to: datetime) -> str:
+    """Формат времени среза для подписи и графика."""
+    return "{} — {} UTC".format(
+        time_from.strftime("%d.%m %H:%M"),
+        time_to.strftime("%d.%m %H:%M"),
+    )
+
+
 def build_graph_png_lines(
     series: dict[tuple[str, str], list[tuple[datetime, float]]],
     period_label: str,
     stats: list[dict],
+    time_from: datetime,
+    time_to: datetime,
 ) -> io.BytesIO:
     """Строит график L2 (линии по интерфейсам) и таблицу Min/Max/Last/Avg/~95th в Gbps на одном изображении."""
     from matplotlib import gridspec
+    time_range_str = _fmt_time_range(time_from, time_to)
     n_table_rows = len(stats) + 1
     fig = plt.figure(figsize=(12, 4 + n_table_rows * 0.35))
     gs = gridspec.GridSpec(2, 1, height_ratios=[1.2, 0.8], hspace=0.35)
@@ -194,7 +205,7 @@ def build_graph_png_lines(
         ax.plot(timestamps, gbps, color=colors[i % len(colors)], linewidth=1.2, label=label)
     ax.set_ylabel("Gbps (L2)")
     ax.set_xlabel("Время (UTC)")
-    ax.set_title("Трафик InIfBoundary = external, период: {}".format(period_label))
+    ax.set_title("Трафик InIfBoundary = external, период: {}\nСрез: {}".format(period_label, time_range_str), fontsize=10)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M", tz=timezone.utc))
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=25)
     ax.legend(loc="upper left", fontsize=7)
@@ -233,9 +244,9 @@ def build_graph_png_lines(
     return buf
 
 
-def format_stats_caption(period_label: str) -> str:
-    """Короткая подпись под фото (таблица уже на изображении)."""
-    return "Период: {} (UTC). L2".format(period_label)
+def format_stats_caption(period_label: str, time_from: datetime, time_to: datetime) -> str:
+    """Подпись: период и точное время среза (с — по)."""
+    return "Период: {}. Срез: {} L2".format(period_label, _fmt_time_range(time_from, time_to))
 
 
 def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
@@ -256,8 +267,8 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
     if err:
         return None, None, err
     try:
-        buf = build_graph_png_lines(series, label, stats)
-        caption = format_stats_caption(label)
+        buf = build_graph_png_lines(series, label, stats, time_from, time_to)
+        caption = format_stats_caption(label, time_from, time_to)
         return buf, caption, None
     except Exception as e:
         return None, None, "Ошибка построения графика: {}".format(e)
