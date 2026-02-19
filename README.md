@@ -19,21 +19,15 @@ git clone https://github.com/vbashtyrev/akvorado-telegram-graph.git
 cd akvorado-telegram-graph
 ```
 
-Если **git нет** — скачать архив по ссылке (wget/curl есть в любом Linux):
+Если **git нет** — скачать архив через **curl** (есть по умолчанию в AlmaLinux и других) и распаковать **tar**:
 
 ```bash
-# Скачать ZIP-архив (ветка main)
-wget -O akvorado-telegram-graph.zip https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.zip
-
-# или через curl:
-# curl -L -o akvorado-telegram-graph.zip https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.zip
-
-# Распаковать
-unzip akvorado-telegram-graph.zip
-
-# Перейти в каталог (после распаковки имя с суффиксом -main)
+curl -L -o main.tar.gz https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.tar.gz
+tar xzf main.tar.gz
 cd akvorado-telegram-graph-main
 ```
+
+То же через wget (если установлен): `wget -O main.tar.gz https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.tar.gz`
 
 Дальнейшие шаги те же: создать `.env` и `config.yaml`, заполнить, запустить `docker compose up -d`.
 
