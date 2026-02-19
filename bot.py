@@ -476,8 +476,31 @@ async def on_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text("График отправлен.")
 
 
+async def _send_settings_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправить запрос ввода пояса и добавить пользователя в pending_timezone."""
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is not None:
+        context.bot_data.setdefault("pending_timezone", set()).add(user_id)
+    keyboard = [[InlineKeyboardButton("Отмена", callback_data="tz_cancel")]]
+    text = "Введите ваш часовой пояс: смещение от UTC в часах, например +3 или -5. По умолчанию UTC."
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /settings — настройка часового пояса (пункт меню «Настройки»)."""
+    config = context.bot_data.get("config") or {}
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
+        await update.message.reply_text("Команда недоступна в этом чате.")
+        return
+    await _send_settings_prompt(update, context)
+
+
 async def on_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кнопка «Настройки»: просим ввести пояс в формате +3 или -5."""
+    """Кнопка «Настройки» в клавиатуре: просим ввести пояс в формате +3 или -5."""
     query = update.callback_query
     await query.answer()
     if not query.data or query.data != "settings":
@@ -486,14 +509,7 @@ async def on_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
         await query.edit_message_text("Недоступно в этом чате.")
         return
-    user_id = update.effective_user.id if update.effective_user else None
-    if user_id is not None:
-        context.bot_data.setdefault("pending_timezone", set()).add(user_id)
-    keyboard = [[InlineKeyboardButton("Отмена", callback_data="tz_cancel")]]
-    await query.edit_message_text(
-        "Введите ваш часовой пояс: смещение от UTC в часах, например +3 или -5. По умолчанию UTC.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    await _send_settings_prompt(update, context)
 
 
 async def on_tz_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -582,6 +598,7 @@ def main() -> int:
             BotCommand("graph_6h", "6 ч"),
             BotCommand("graph_24h", "24 ч"),
             BotCommand("graph_7d", "7 д"),
+            BotCommand("settings", "Настройки"),
         ])
         await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
@@ -599,6 +616,7 @@ def main() -> int:
     app.add_handler(CommandHandler("graph_24h", cmd_period))
     app.add_handler(CommandHandler("graph_7d", cmd_period))
     app.add_handler(CommandHandler("graph", cmd_graph))
+    app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     app.add_handler(CallbackQueryHandler(on_period_callback, pattern="^period_"))
     app.add_handler(CallbackQueryHandler(on_settings_callback, pattern="^settings$"))
