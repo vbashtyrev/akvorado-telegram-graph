@@ -10,12 +10,32 @@ ClickHouse должен быть уже запущен (в другом прое
 
 На сервере должны быть установлены Docker и docker compose v2. ClickHouse уже должен быть доступен (например, в другом контейнере с пробросом порта 8123 на хост).
 
-**1. Клонировать репозиторий и перейти в каталог:**
+**1. Скачать репозиторий и перейти в каталог**
+
+Если установлен **git**:
 
 ```bash
 git clone https://github.com/vbashtyrev/akvorado-telegram-graph.git
 cd akvorado-telegram-graph
 ```
+
+Если **git нет** — скачать архив по ссылке (wget/curl есть в любом Linux):
+
+```bash
+# Скачать ZIP-архив (ветка main)
+wget -O akvorado-telegram-graph.zip https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.zip
+
+# или через curl:
+# curl -L -o akvorado-telegram-graph.zip https://github.com/vbashtyrev/akvorado-telegram-graph/archive/refs/heads/main.zip
+
+# Распаковать
+unzip akvorado-telegram-graph.zip
+
+# Перейти в каталог (после распаковки имя с суффиксом -main)
+cd akvorado-telegram-graph-main
+```
+
+Дальнейшие шаги те же: создать `.env` и `config.yaml`, заполнить, запустить `docker compose up -d`.
 
 **2. Создать конфиг из примеров:**
 
@@ -55,13 +75,15 @@ docker compose logs -f bot
 
 ## Обновление кода на сервере
 
-Зайти в каталог проекта, подтянуть изменения из репозитория и пересобрать контейнер:
+**Если ставили через git:** зайти в каталог, подтянуть изменения, пересобрать контейнер:
 
 ```bash
 cd akvorado-telegram-graph
 git pull
 docker compose up -d --build
 ```
+
+**Если ставили через архив (без git):** скачать новый архив, распаковать в новую папку, скопировать туда свой `.env` и `config.yaml`, затем из новой папки запустить `docker compose up -d --build`. Старый каталог можно удалить.
 
 `--build` пересоберёт образ с новым кодом. Логи: `docker compose logs -f bot`.
 
