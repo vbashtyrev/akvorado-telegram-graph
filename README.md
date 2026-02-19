@@ -87,7 +87,7 @@ docker compose up -d --build
 
 - **TELEGRAM_BOT_TOKEN** — токен от [@BotFather](https://t.me/BotFather) (обязательно).
 - **TELEGRAM_ALLOWED_CHAT_IDS** — ID чатов/групп через запятую (группа — отрицательное число); пусто = бот отвечает в любом чате.
-- **CLICKHOUSE_URL** — URL ClickHouse (по умолчанию `http://127.0.0.1:8123`; в Docker в compose подставляется `host.docker.internal:8123`).
+- **CLICKHOUSE_URL** — URL ClickHouse (по умолчанию `http://127.0.0.1:8123`). Бот в Docker запущен с `network_mode: host`, поэтому видит тот же 127.0.0.1, что и хост (подходит, если ClickHouse проброшен как 127.0.0.1:8123).
 
 То же можно задать в `config.yaml` (секции `telegram` и `clickhouse`). Переменные окружения переопределяют значения из файла.
 
@@ -95,3 +95,14 @@ docker compose up -d --build
 ```bash
 docker compose restart bot
 ```
+
+---
+
+## Проверка доступности ClickHouse
+
+Бот запущен с **network_mode: host**, поэтому использует сеть хоста и обращается к ClickHouse по `127.0.0.1:8123` так же, как с самого хоста. Достаточно, чтобы на хосте отвечал порт 8123:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8123/ping
+```
+Ожидается `200`. Если бот пишет Connection refused — проверьте, что контейнер ClickHouse запущен и порт проброшен как `127.0.0.1:8123->8123`.
