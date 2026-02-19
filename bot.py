@@ -293,10 +293,13 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
     ch_cfg = config.get("clickhouse", {})
     url = ch_cfg.get("url", "http://127.0.0.1:8123")
     boundary = ch_cfg.get("boundary_filter", "external")
-    # Для 24 ч и 7 д: если задана table_24h — используем её (как в UI Akvorado, напр. flows_5m0s), чтобы цифры совпадали
+    # Консоль Akvorado для разных периодов часто использует разные таблицы (1 ч — flows/flows_1m0s, 6 ч — flows_1m0s, 24/7 д — flows_5m0s)
     if hours >= 24 and ch_cfg.get("table_24h"):
         table = ch_cfg.get("table_24h")
         interval_sec = ch_cfg.get("interval_sec_24h", 300)
+    elif hours >= 6 and ch_cfg.get("table_6h"):
+        table = ch_cfg.get("table_6h")
+        interval_sec = ch_cfg.get("interval_sec_6h", 60)
     else:
         table = ch_cfg.get("table", "default.flows")
     time_to = datetime.now(timezone.utc)

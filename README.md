@@ -91,6 +91,8 @@ docker compose up -d --build
 
 То же можно задать в `config.yaml` (секции `telegram` и `clickhouse`). Переменные окружения переопределяют значения из файла.
 
+**Цифры расходятся с консолью Akvorado?** Консоль для разных периодов использует разные таблицы: для 6 ч часто `flows_1m0s`, для 24/7 д — `flows_5m0s`. В `config.yaml` (секция `clickhouse`) задайте `table_6h: "default.flows_1m0s"`, `interval_sec_6h: 60` и при необходимости `table_24h` / `interval_sec_24h`, затем перезапустите бота.
+
 **Изменили `.env` или `config.yaml`?** Бот подхватывает конфиг только при старте. Перезапустите контейнер:
 ```bash
 docker compose restart bot
