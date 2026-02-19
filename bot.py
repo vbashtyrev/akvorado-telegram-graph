@@ -211,7 +211,7 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
     """Строит график за период по интерфейсам (InIfName, ExporterName). Возвращает (buf, caption, None) или (None, None, error_message)."""
     _, label, hours, interval_sec = period_entry
     ch_cfg = config.get("clickhouse", {})
-    url = ch_cfg.get("url", "http://localhost:8123")
+    url = ch_cfg.get("url", "http://127.0.0.1:8123")
     table = ch_cfg.get("table", "default.flows")
     boundary = ch_cfg.get("boundary_filter", "external")
     time_to = datetime.now(timezone.utc)
@@ -340,7 +340,7 @@ def main() -> int:
 
     # Минимальный конфиг по умолчанию (Docker/Compose)
     config.setdefault("telegram", {})
-    config.setdefault("clickhouse", {"url": "http://clickhouse:8123", "table": "default.flows", "boundary_filter": "external"})
+    config.setdefault("clickhouse", {"url": "http://127.0.0.1:8123", "table": "default.flows", "boundary_filter": "external"})
     apply_env_overrides(config)
 
     token = (config.get("telegram") or {}).get("bot_token")

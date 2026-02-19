@@ -87,6 +87,11 @@ docker compose up -d --build
 
 - **TELEGRAM_BOT_TOKEN** — токен от [@BotFather](https://t.me/BotFather) (обязательно).
 - **TELEGRAM_ALLOWED_CHAT_IDS** — ID чатов/групп через запятую (группа — отрицательное число); пусто = бот отвечает в любом чате.
-- **CLICKHOUSE_URL** — URL ClickHouse (по умолчанию в compose: `http://host.docker.internal:8123`).
+- **CLICKHOUSE_URL** — URL ClickHouse (по умолчанию `http://127.0.0.1:8123`; в Docker в compose подставляется `host.docker.internal:8123`).
 
 То же можно задать в `config.yaml` (секции `telegram` и `clickhouse`). Переменные окружения переопределяют значения из файла.
+
+**Изменили `.env` или `config.yaml`?** Бот подхватывает конфиг только при старте. Перезапустите контейнер:
+```bash
+docker compose restart bot
+```
