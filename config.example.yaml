@@ -20,7 +20,8 @@ clickhouse:
   # для 6 ч часто берут flows_1m0s (интервал 60 с):
   # table_6h: "default.flows_1m0s"
   # interval_sec_6h: 60
-  # для 24 ч / 7 д — flows_5m0s (интервал 300 с):
-  # table_24h: "default.flows_5m0s"
-  # interval_sec_24h: 300
+  # для 24 ч / 7 д: если в UI min — десятки Мбит/с, а бот присылает сотни — в консоли почасовая агрегация:
+  # table_24h: "default.flows_1h0m0s"
+  # interval_sec_24h: 3600
+  # если в UI min ближе к нашим — оставьте 5-минутную: flows_5m0s, 300
   boundary_filter: "external"   # только внешний трафик
