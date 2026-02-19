@@ -132,8 +132,8 @@ def fetch_bps_by_interface(
     if not series:
         return {}, [], "За выбранный период данных нет (InIfBoundary = {}).".format(boundary)
 
-    # При расчёте Min/Last/Avg/p95 обрезаем края (хвосты и головы), чтобы не занижать из-за неполных интервалов
-    trim_buckets = 2
+    # Обрезка краёв (хвосты/головы): 1 интервал с каждого конца — неполные краевые интервалы не тянут Min/Last вниз
+    trim_buckets = 1
     stats = []
     for (exporter, inif), points in series.items():
         if not points:
@@ -240,11 +240,16 @@ def format_stats_caption(period_label: str) -> str:
 
 def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
     """Строит график за период по интерфейсам (InIfName, ExporterName). Возвращает (buf, caption, None) или (None, None, error_message)."""
-    _, label, hours, interval_sec = period_entry
+    key, label, hours, interval_sec = period_entry
     ch_cfg = config.get("clickhouse", {})
     url = ch_cfg.get("url", "http://127.0.0.1:8123")
-    table = ch_cfg.get("table", "default.flows")
     boundary = ch_cfg.get("boundary_filter", "external")
+    # Для 24 ч и 7 д: если задана table_24h — используем её (как в UI Akvorado, напр. flows_5m0s), чтобы цифры совпадали
+    if hours >= 24 and ch_cfg.get("table_24h"):
+        table = ch_cfg.get("table_24h")
+        interval_sec = ch_cfg.get("interval_sec_24h", 300)
+    else:
+        table = ch_cfg.get("table", "default.flows")
     time_to = datetime.now(timezone.utc)
     time_from = time_to - timedelta(hours=hours)
     series, stats, err = fetch_bps_by_interface(url, table, boundary, time_from, time_to, interval_sec)

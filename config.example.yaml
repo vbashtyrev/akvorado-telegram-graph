@@ -13,5 +13,7 @@ clickhouse:
 
   # Таблица и фильтр как в UI Akvorado (InIfBoundary = external)
   table: "default.flows"
-  # Для длинных периодов (7д) можно указать агрегированную таблицу (например flows_5m0s) и interval_sec: 300
+  # Если цифры для 24 ч / 7 д расходятся с UI — укажите ту же таблицу, что в консоли Akvorado:
+  # table_24h: "default.flows_5m0s"
+  # interval_sec_24h: 300
   boundary_filter: "external"   # только внешний трафик
