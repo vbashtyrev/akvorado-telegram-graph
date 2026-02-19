@@ -64,6 +64,16 @@ def apply_env_overrides(config: dict) -> None:
         config["display_timezone"] = tz_env.strip()
 
 
+def is_chat_allowed(config: dict, chat_id: int | None) -> bool:
+    """Разрешён ли чат: пустой allowed_chat_ids — любой; иначе только из списка."""
+    allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
+    if not allowed:
+        return True
+    if chat_id is None:
+        return False
+    return chat_id in allowed
+
+
 def _tbl_sql(table: str) -> str:
     if "." in table and not table.startswith("."):
         db, tbl = table.split(".", 1)
@@ -333,8 +343,7 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("Неизвестный период.")
         return
     config = context.bot_data.get("config") or {}
-    allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
-    if allowed and update.effective_chat and update.effective_chat.id not in allowed:
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
         await update.message.reply_text("Команда недоступна в этом чате.")
         return
     _, label, _, _ = entry
@@ -353,8 +362,7 @@ async def cmd_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config = context.bot_data.get("config") or {}
-    allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
-    if allowed and update.effective_chat and update.effective_chat.id not in allowed:
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
         await update.message.reply_text("Команда недоступна в этом чате.")
         return
     keyboard = [
@@ -373,8 +381,7 @@ async def on_text_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if text != "график":
         return
     config = context.bot_data.get("config") or {}
-    allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
-    if allowed and update.effective_chat and update.effective_chat.id not in allowed:
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
         return
     keyboard = [
         [InlineKeyboardButton(label, callback_data="period_" + key) for key, label, _, _ in PERIODS],
@@ -392,8 +399,7 @@ async def on_period_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     key = query.data.replace("period_", "", 1)
     config = context.bot_data.get("config") or {}
-    allowed = config.get("telegram", {}).get("allowed_chat_ids") or []
-    if allowed and update.effective_chat and update.effective_chat.id not in allowed:
+    if not is_chat_allowed(config, update.effective_chat.id if update.effective_chat else None):
         await query.edit_message_text("Недоступно в этом чате.")
         return
     entry = next((p for p in PERIODS if p[0] == key), None)
