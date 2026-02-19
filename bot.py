@@ -147,64 +147,86 @@ def fetch_bps_by_interface(
         stats.append({
             "InIfName": inif,
             "ExporterName": exporter,
-            "Min": min_bps / 1e6,
-            "Max": max_bps / 1e6,
-            "Last": last_bps / 1e6,
-            "Average": avg_bps / 1e6,
-            "P95": p95_bps / 1e6,
+            "Min": min_bps / 1e9,
+            "Max": max_bps / 1e9,
+            "Last": last_bps / 1e9,
+            "Average": avg_bps / 1e9,
+            "P95": p95_bps / 1e9,
         })
     stats.sort(key=lambda x: (x["ExporterName"], x["InIfName"]))
     return series, stats, None
 
 
+def _fmt_gbps(val: float) -> str:
+    """Форматирование в Gbps как в UI Akvorado."""
+    if val >= 1:
+        return "{:.2f}Gbps".format(val)
+    return "{:.2f}Mbps".format(val * 1000)
+
+
 def build_graph_png_lines(
     series: dict[tuple[str, str], list[tuple[datetime, float]]],
     period_label: str,
+    stats: list[dict],
 ) -> io.BytesIO:
-    """Строит линейный график L2 бит/с по интерфейсам (ExporterName / InIfName)."""
-    fig, ax = plt.subplots(figsize=(10, 5))
+    """Строит график L2 (линии по интерфейсам) и таблицу Min/Max/Last/Avg/~95th в Gbps на одном изображении."""
+    from matplotlib import gridspec
+    n_table_rows = len(stats) + 1
+    fig = plt.figure(figsize=(12, 4 + n_table_rows * 0.35))
+    gs = gridspec.GridSpec(2, 1, height_ratios=[1.2, 0.8], hspace=0.35)
+    ax = fig.add_subplot(gs[0])
     colors = plt.cm.tab10.colors
     for i, ((exporter, inif), points) in enumerate(sorted(series.items())):
         if not points:
             continue
         timestamps = [p[0] for p in points]
-        mbps = [p[1] / 1e6 for p in points]
+        gbps = [p[1] / 1e9 for p in points]
         label = "{} / {}".format(exporter, inif) if exporter else inif
-        ax.plot(timestamps, mbps, color=colors[i % len(colors)], linewidth=1.2, label=label)
-    ax.set_ylabel("Мбит/с (L2)")
+        ax.plot(timestamps, gbps, color=colors[i % len(colors)], linewidth=1.2, label=label)
+    ax.set_ylabel("Gbps (L2)")
     ax.set_xlabel("Время (UTC)")
     ax.set_title("Трафик InIfBoundary = external, период: {}".format(period_label))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M", tz=timezone.utc))
-    plt.xticks(rotation=25)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=25)
     ax.legend(loc="upper left", fontsize=7)
-    plt.grid(True, linestyle="--", alpha=0.5)
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    if stats:
+        ax_t = fig.add_subplot(gs[1])
+        ax_t.axis("off")
+        col_labels = ["In If Name", "Exporter Name", "Min", "Max", "Last", "Average", "~95th"]
+        cell_text = []
+        for s in stats:
+            cell_text.append([
+                (s["InIfName"] or ""),
+                (s["ExporterName"] or ""),
+                _fmt_gbps(s["Min"]),
+                _fmt_gbps(s["Max"]),
+                _fmt_gbps(s["Last"]),
+                _fmt_gbps(s["Average"]),
+                _fmt_gbps(s["P95"]),
+            ])
+        table = ax_t.table(
+            cellText=cell_text,
+            colLabels=col_labels,
+            loc="center",
+            cellLoc="center",
+            colColours=["#e0e0e0"] * 7,
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1, 1.8)
     plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight")
     plt.close()
     buf.seek(0)
     return buf
 
 
-def format_stats_caption(period_label: str, stats: list[dict], max_caption_len: int = 1020) -> str:
-    """Подпись: период + таблица InIfName, ExporterName, Min, Max, Last, Average, ~95th (Мбит/с)."""
-    lines = ["Период: {} (UTC). L2 Мбит/с".format(period_label)]
-    if not stats:
-        return lines[0]
-    header = "InIfName      | ExporterName | Min   | Max   | Last  | Avg   | ~95th"
-    lines.append(header)
-    for s in stats:
-        row = "{:<13} | {:<12} | {:>5.1f} | {:>5.1f} | {:>5.1f} | {:>5.1f} | {:>5.1f}".format(
-            (s["InIfName"] or "")[:13],
-            (s["ExporterName"] or "")[:12],
-            s["Min"], s["Max"], s["Last"], s["Average"], s["P95"],
-        )
-        lines.append(row)
-        if len("\n".join(lines)) > max_caption_len:
-            lines.pop()
-            lines.append("… (обрезано, всего {} интерфейсов)".format(len(stats)))
-            break
-    return "\n".join(lines)
+def format_stats_caption(period_label: str) -> str:
+    """Короткая подпись под фото (таблица уже на изображении)."""
+    return "Период: {} (UTC). L2".format(period_label)
 
 
 def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesIO | None, str | None, str | None]:
@@ -220,8 +242,8 @@ def build_graph_for_period(config: dict, period_entry: tuple) -> tuple[io.BytesI
     if err:
         return None, None, err
     try:
-        buf = build_graph_png_lines(series, label)
-        caption = format_stats_caption(label, stats)
+        buf = build_graph_png_lines(series, label, stats)
+        caption = format_stats_caption(label)
         return buf, caption, None
     except Exception as e:
         return None, None, "Ошибка построения графика: {}".format(e)
