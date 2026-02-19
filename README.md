@@ -53,6 +53,20 @@ docker compose logs -f bot
 
 ---
 
+## Обновление кода на сервере
+
+Зайти в каталог проекта, подтянуть изменения из репозитория и пересобрать контейнер:
+
+```bash
+cd akvorado-telegram-graph
+git pull
+docker compose up -d --build
+```
+
+`--build` пересоберёт образ с новым кодом. Логи: `docker compose logs -f bot`.
+
+---
+
 ## Конфигурация
 
 - **TELEGRAM_BOT_TOKEN** — токен от [@BotFather](https://t.me/BotFather) (обязательно).

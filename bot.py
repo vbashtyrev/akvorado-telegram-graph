@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram-бот: график трафика Akvorado (ClickHouse) с выбором периода.
-Команда /graph или «График» → кнопки 1ч / 6ч / 24ч / 7д → запрос в CH → картинка в чат.
+Меню бота или /graph, или «График» → кнопки 1 ч / 6 ч / 24 ч / 7 д → запрос в CH → картинка в чат.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # python-telegram-bot 21.x
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import BotCommand, MenuButtonCommands, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -251,14 +251,26 @@ def main() -> int:
         print("В config.yaml задайте telegram.bot_token.", file=sys.stderr)
         return 1
 
-    app = Application.builder().token(token).build()
+    async def post_init(application: Application) -> None:
+        """Меню бота: команды и кнопка меню (вместо ввода /graph)."""
+        await application.bot.set_my_commands([
+            BotCommand("graph", "График трафика за период"),
+        ])
+        await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+    app = (
+        Application.builder()
+        .token(token)
+        .post_init(post_init)
+        .build()
+    )
     app.bot_data["config"] = config
 
     app.add_handler(CommandHandler("graph", cmd_graph))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_graph))
     app.add_handler(CallbackQueryHandler(on_period_callback))
 
-    print("Бот запущен. Команда /graph или «График» — выбор периода.")
+    print("Бот запущен. Меню (кнопка слева от поля ввода) или /graph, или «График» — выбор периода.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
     return 0
 
