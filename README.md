@@ -6,21 +6,50 @@ ClickHouse должен быть уже запущен (в другом прое
 
 ---
 
-## Запуск (Docker Compose)
+## Запуск на сервере (с нуля)
 
-Требования: Docker 27.x, docker compose v2.
+На сервере должны быть установлены Docker и docker compose v2. ClickHouse уже должен быть доступен (например, в другом контейнере с пробросом порта 8123 на хост).
+
+**1. Клонировать репозиторий и перейти в каталог:**
 
 ```bash
+git clone https://github.com/vbashtyrev/akvorado-telegram-graph.git
 cd akvorado-telegram-graph
+```
+
+**2. Создать конфиг из примеров:**
+
+```bash
 cp .env.example .env
 cp config.example.yaml config.yaml
-nano .env   # TELEGRAM_BOT_TOKEN=..., при необходимости TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890
+```
+
+**3. Заполнить `.env`** (токен от [@BotFather](https://t.me/BotFather); при необходимости — ID группы, куда писать):
+
+```bash
+nano .env
+```
+
+Указать:
+- `TELEGRAM_BOT_TOKEN=...` — обязательно.
+- `TELEGRAM_ALLOWED_CHAT_IDS=-1001234567890` — опционально; ID группы (отрицательное число). Несколько через запятую. Пусто — бот отвечает в любом чате.
+- `CLICKHOUSE_URL` — по умолчанию в compose уже задан `http://host.docker.internal:8123` (ClickHouse на этом же хосте, порт 8123). Если ClickHouse на другом адресе — задать здесь.
+
+**4. Запустить бота:**
+
+```bash
 docker compose up -d
 ```
 
-Логи: `docker compose logs -f bot`.
+**5. Проверить логи:**
 
-По умолчанию бот подключается к ClickHouse по `http://host.docker.internal:8123`. Другой адрес — задать `CLICKHOUSE_URL` в `.env` или в `config.yaml` (секция `clickhouse.url`).
+```bash
+docker compose logs -f bot
+```
+
+В Telegram: команда `/graph` или текст «График» — появятся кнопки выбора периода, после выбора бот пришлёт график.
+
+Перезапуск: `docker compose restart bot`. Остановка: `docker compose down`.
 
 ---
 
